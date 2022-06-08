@@ -1,0 +1,115 @@
+#!/bin/bash
+#Requires AWS CLI properly configured with authentication and default area.
+
+usageError() { 
+    echo "Usage: $0 [-fgdfgdfdfjdfkjdfjd" 1>&2; exit 1; 
+}
+
+getId(){
+    echo `aws ec2 describe-tags \
+    --filters Name=value,Values=$1 \
+    --query 'Tags[*].[ResourceId]' \
+    --output text`
+}
+
+getInstanceStatus(){
+    #Status Codes:
+    #0 (pending), 16 (running), 32 (shutting-down), 
+    #48 (terminated), 64 (stopping), and 80 (stopped)
+    
+    echo `aws ec2 describe-instances --instance-id $1 \
+    --query 'Reservations[0].Instances[0].State.Code' \
+    --output text`
+}
+
+if [[ $1 == *'-'* ]] || [ $# -lt 1 ];
+then
+    usageError
+fi
+
+if ([[ $1 == start ]] || [[ $1 == stop ]] || [[ $1 == addr ]]) \
+&& ([[ $3 == *'-'* ]] || [ -z $3]) 
+then
+    mainArg=$1
+    instanceId=$2
+    shift 2
+
+elif ([[ $1 == list ]] || [[ $1 == ls ]]) && ([[ $2 == *'-'* ]] \
+|| [ -z $2]) 
+then
+    mainArg=$1
+    shift 1
+else
+    usageError
+fi
+
+instanceTag=$instanceId #Instance name is the same as ID if no Tag was used
+
+while getopts "ta" opt; do
+    case "${opt}" in
+        t)  instanceId=$(getId $instanceTag) ;;
+        a)  addrFlag=true ;;
+        # a)  ;;
+        # :)  
+        #     echo "ERROR: Option -$OPTARG requires an argument"
+        #     usageError
+        #     ;;
+        \?)
+            echo "ERROR: Invalid option -$OPTARG"
+            usageError
+            ;;
+    esac
+done
+
+if [ $mainArg = start ] 
+then 
+    echo -n 'Starting instance...'
+    aws ec2 start-instances --instance-ids $instanceId > /dev/null
+    until [ $(getInstanceStatus $instanceId) = 16 ]
+    do
+        sleep 3
+        echo -n "."
+    done
+    echo -e "\n$instanceTag is \u001b[32m\033[1mrunning\033[0m"
+
+    ####TODO: AJEITAR ESSA ZEBIARRA
+    if [[ $addrFlag == true ]]; then
+        echo ""
+        addresses=( `aws ec2 describe-instances --instance-id $instanceId \
+        --query 'Reservations[*].Instances[0].[PublicDnsName, PrivateDnsName, PublicIpAddress, PrivateIpAddress]' \
+        --output text | grep .` )
+        echo -e 'Public DNS   ' ${addresses[0]} \
+            '\nPrivate DNS  ' ${addresses[1]} \
+            '\nPublic IP    ' ${addresses[2]} \
+            '\nPrivate IP   ' ${addresses[3]}
+    fi
+    
+fi
+
+if [ $mainArg = stop ] 
+then 
+    aws ec2 stop-instances --instance-ids $instanceId > /dev/null
+    echo -n 'Stopping instance...'
+    until [ $(getInstanceStatus $instanceId) = 80 ]
+    do
+        sleep 3
+        echo -n "."
+    done
+    echo -e "\n$instanceTag has \u001b[31m\033[1mstopped\033[0m"
+fi
+
+
+#TODO: query mais bonitinha
+if [ $mainArg = addr ]; then
+    aws ec2 describe-instances --instance-id $instanceId \
+    --query 'Reservations[*].Instances[0].[PublicDnsName, PrivateDnsName, PublicIpAddress, PrivateIpAddress]' \
+    --output text | grep .
+fi
+
+if [ $mainArg = list ] || [ $mainArg = ls ] 
+then 
+    aws ec2 describe-instances \
+    --filters Name=tag-key,Values=Name \
+    --query 'Reservations[*].Instances[*].{Name:Tags[?Key==`Name`]|[0].Value,Instance:InstanceId, State: State.Name}' \
+    --output text | grep .
+fi
